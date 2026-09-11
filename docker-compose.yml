@@ -1,0 +1,30 @@
+# url-change-monitor — Docker Compose (development)
+# See docs/design.md for the full architecture.
+# Backend and frontend services will be added as the MVP is scaffolded.
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: url-change-monitor-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: url_monitor
+      TZ: Asia/Shanghai
+    ports:
+      # Loopback only: the backend and local tools reach MySQL via localhost,
+      # so the host machine never exposes it to the network.
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: [CMD, mysqladmin, ping, -h, localhost, -uroot, -proot]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # TODO: backend (Spring Boot)
+  # TODO: frontend (React + TypeScript)
+
+volumes:
+  mysql_data:

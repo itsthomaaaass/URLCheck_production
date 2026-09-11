@@ -1,0 +1,38 @@
+# Backend (Java / Spring Boot)
+backend/target/
+*.class
+*.jar
+*.iml
+.idea/
+
+# Frontend (React / Node)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE / OS / misc
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+
+# Dev runtime artifacts (local server logs, process IDs)
+.dev-logs/
+
+# Local deployment secrets: curl cookie jars, TLS keystores and certificates
+cookies.txt
+*.jks
+*.p12
+*.pfx
+*.keystore
+*.pem
+*.key
+ca.pem

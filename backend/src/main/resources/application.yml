@@ -1,0 +1,34 @@
+server:
+  # SERVER_PORT wins, then the platform-provided PORT (Render, Railway, Heroku),
+  # then the local default.
+  port: ${SERVER_PORT:${PORT:8080}}
+  # Honour X-Forwarded-* headers so cookies and generated URLs stay correct
+  # when the app runs behind a reverse proxy or load balancer.
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: ${SESSION_COOKIE_SAME_SITE:lax}
+        # Only send the session cookie over HTTPS. Set to true in production.
+        secure: ${SESSION_COOKIE_SECURE:false}
+
+spring:
+  application:
+    name: url-change-monitor-backend
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/url_monitor?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
+
+# Comma-separated browser origins allowed to call /api with credentials, e.g.
+#   CORS_ALLOWED_ORIGINS=https://app.example.com,http://localhost:5173
+# Empty (the default) writes no CORS headers at all, which is correct when the
+# frontend is served from the same origin as this API.
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

@@ -1,0 +1,5 @@
+# Build context exclusions for backend/Dockerfile
+target/
+.idea/
+*.iml
+*.log
