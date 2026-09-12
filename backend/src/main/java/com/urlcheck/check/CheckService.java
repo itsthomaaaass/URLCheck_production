@@ -8,12 +8,12 @@ import com.urlcheck.url.MonitoredUrl;
 import com.urlcheck.url.MonitoredUrlMapper;
 
 /**
- * Runs an accessibility check for one of the current user's URLs.
+ * The manual, on-demand check.
  *
- * <p>Nothing is persisted: the check is computed and returned. The result is
- * therefore only as fresh as the last request, and "never checked" is a
- * client-side state. If the timeline module later needs to record outcomes,
- * this method is the single seam where that would happen.
+ * <p>Read-only by design: it probes the URL and reports what that probe means
+ * against the stored baseline, but writes nothing. The timeline is maintained
+ * exclusively by the scheduled checker, so a manual check can never add an
+ * event, move the next scheduled check, or touch the stored hash.
  */
 @Service
 public class CheckService {
@@ -25,7 +25,6 @@ public class CheckService {
         this.urlMapper = urlMapper;
         this.urlChecker = urlChecker;
     }
-
     /**
      * Checks the stored URL with the given id, if it belongs to this user.
      *
@@ -37,6 +36,23 @@ public class CheckService {
         if (monitoredUrl == null) {
             throw new NoSuchElementException("URL 不存在: id=" + urlId);
         }
-        return urlChecker.check(monitoredUrl.getId(), monitoredUrl.getUrl());
+        ProbeResult probe = urlChecker.probe(monitoredUrl.getId(), monitoredUrl.getUrl());
+        ChangeBaseline baseline = new ChangeBaseline(
+                monitoredUrl.getContentHash(),
+                monitoredUrl.getLastStatus(),
+                monitoredUrl.getLastHttpStatus(),
+                monitoredUrl.getLastErrorType());
+        ChangeDecision decision = ChangeDetector.decide(baseline, probe);
+        return new CheckResult(
+                probe.urlId(),
+                probe.checkedAt(),
+                probe.status(),
+                probe.httpStatus(),
+                probe.responseTimeMs(),
+                probe.finalUrl(),
+                probe.errorType(),
+                probe.contentHash(),
+                decision.changed(),
+                decision.type());
     }
 }

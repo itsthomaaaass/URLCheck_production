@@ -1,0 +1,48 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec).
+#
+# Optional: both services can also be created by hand in the Render dashboard
+# with exactly these settings. Secrets are marked "sync: false", so Render asks
+# for them at apply time instead of storing them in this file.
+#
+#   url-check-backend   Docker web service, built from backend/Dockerfile
+#   url-check-frontend  static site, built from frontend/
+
+services:
+  - type: web
+    name: url-check-backend
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /actuator/health
+    envVars:
+      # Entered in the Render dashboard, never committed.
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # The static site is a different origin, so the session cookie must be
+      # allowed cross-site and sent only over HTTPS.
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: SESSION_COOKIE_SAME_SITE
+        value: none
+      # Browser origin of the static site, e.g.
+      # https://url-check-frontend.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # Keep the JVM inside a small plan's memory budget.
+      - key: JAVA_OPTS
+        value: -XX:MaxRAMPercentage=75.0
+
+  - type: web
+    name: url-check-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      # Baked in at build time, so a changed value needs a rebuild.
+      - key: VITE_API_BASE_URL
+        sync: false

@@ -1,0 +1,94 @@
+package com.urlcheck.check;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.LocalDateTime;
+
+import org.junit.jupiter.api.Test;
+
+class ChangeDetectorTest {
+
+    private static final ChangeBaseline NEVER_CHECKED = new ChangeBaseline(null, null, null, null);
+
+    @Test
+    void firstSuccessfulProbeBecomesTheBaseline() {
+        ChangeDecision decision = ChangeDetector.decide(NEVER_CHECKED, up("aaa"));
+        assertThat(decision.type()).isEqualTo(ChangeType.FIRST_CHECK);
+        assertThat(decision.changed()).isTrue();
+        assertThat(decision.status()).isEqualTo(CheckStatus.UP);
+    }
+
+    @Test
+    void identicalHashIsNotAnEvent() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline("aaa", "UP", 200, null), up("aaa"));
+        assertThat(decision.type()).isNull();
+        assertThat(decision.changed()).isFalse();
+    }
+
+    @Test
+    void differentHashIsAContentChange() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline("aaa", "UP", 200, null), up("bbb"));
+        assertThat(decision.type()).isEqualTo(ChangeType.CONTENT_CHANGED);
+        assertThat(decision.changed()).isTrue();
+    }
+
+    @Test
+    void aFailedProbeReportsNoChangeVerdict() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline("aaa", "UP", 200, null), httpError(403));
+        assertThat(decision.type()).isEqualTo(ChangeType.UNAVAILABLE);
+        assertThat(decision.status()).isEqualTo(CheckStatus.DOWN);
+        assertThat(decision.changed()).isNull();
+    }
+
+    @Test
+    void successAfterAFailureIsARecoveryEvenWithoutAStoredHash() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline(null, "DOWN", 403, "HTTP_ERROR"), up("aaa"));
+        assertThat(decision.type()).isEqualTo(ChangeType.RECOVERED);
+        assertThat(decision.changed()).isTrue();
+    }
+
+    @Test
+    void successAfterAFailureWithTheSameBodyIsStillARecovery() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline("aaa", "DOWN", 403, "HTTP_ERROR"), up("aaa"));
+        assertThat(decision.type()).isEqualTo(ChangeType.RECOVERED);
+        assertThat(decision.status()).isEqualTo(CheckStatus.UP);
+        assertThat(decision.changed()).isFalse();
+    }
+
+    @Test
+    void successAfterAFailureWithADifferentBodyIsARecoveryNotAContentChange() {
+        ChangeDecision decision = ChangeDetector.decide(
+                new ChangeBaseline("aaa", "DOWN", 403, "HTTP_ERROR"), up("bbb"));
+        assertThat(decision.type()).isEqualTo(ChangeType.RECOVERED);
+        assertThat(decision.changed()).isTrue();
+    }
+
+    @Test
+    void anIdenticalFailureIsRecognisedAsARepeat() {
+        ChangeBaseline baseline = new ChangeBaseline("aaa", "DOWN", 403, "HTTP_ERROR");
+        assertThat(ChangeDetector.sameFailureAsLast(baseline, httpError(403))).isTrue();
+    }
+
+    @Test
+    void aDifferentFailureOrASuccessIsNotARepeat() {
+        ChangeBaseline baseline = new ChangeBaseline("aaa", "DOWN", 403, "HTTP_ERROR");
+        assertThat(ChangeDetector.sameFailureAsLast(baseline, httpError(500))).isFalse();
+        assertThat(ChangeDetector.sameFailureAsLast(baseline, up("aaa"))).isFalse();
+        assertThat(ChangeDetector.sameFailureAsLast(NEVER_CHECKED, httpError(403))).isFalse();
+    }
+
+    private static ProbeResult up(String hash) {
+        return new ProbeResult(1L, LocalDateTime.now(), CheckStatus.UP, 200, 12,
+                "https://example.com/", null, hash);
+    }
+
+    private static ProbeResult httpError(int status) {
+        return new ProbeResult(1L, LocalDateTime.now(), CheckStatus.DOWN, status, 12,
+                "https://example.com/", CheckErrorType.HTTP_ERROR, null);
+    }
+}

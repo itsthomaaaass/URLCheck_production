@@ -28,6 +28,26 @@ spring:
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  # Scheduled monitoring. Every value is an environment variable, so one
+  # deployment can check hourly and another every minute without a rebuild.
+  # See docs/timeline.md.
+  check:
+    enabled: ${CHECK_SCHEDULER_ENABLED:true}
+    tick-seconds: ${CHECK_SCHEDULER_TICK_SECONDS:15}
+    initial-delay-seconds: ${CHECK_SCHEDULER_INITIAL_DELAY_SECONDS:20}
+    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:3600}
+    batch-size: ${CHECK_BATCH_SIZE:20}
+    retention-per-url: ${CHANGE_RETENTION_PER_URL:10}
+    on-create: ${CHECK_ON_CREATE:true}
+
+# Health probe for the hosting platform (Render). Only the health endpoint is
+# exposed over HTTP; it includes the datasource, so a broken database fails the
+# probe instead of leaving a half-working container in rotation.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
 
 mybatis:
   configuration:

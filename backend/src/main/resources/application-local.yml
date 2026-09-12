@@ -1,0 +1,9 @@
+# Local development profile.
+#
+# Identical to application.yml except the scheduler re-checks every URL once a
+# minute, so the timeline fills in quickly while testing. Activate it with
+# SPRING_PROFILES_ACTIVE=local (or --spring.profiles.active=local). Setting the
+# CHECK_INTERVAL_SECONDS environment variable still overrides this value.
+app:
+  check:
+    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:60}

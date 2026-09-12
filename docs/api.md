@@ -22,7 +22,13 @@ See `docs/design.md` (section 23) for the full planned API surface.
   "name": "GitHub Homepage",
   "url": "https://github.com",
   "description": "Tracks release announcements",
-  "createdAt": "2026-09-09T09:30:00"
+  "createdAt": "2026-09-09T09:30:00",
+  "lastStatus": "UP",
+  "lastHttpStatus": 200,
+  "lastErrorType": null,
+  "lastCheckedAt": "2026-09-12T10:00:00.123",
+  "changeCount": 23,
+  "checkIntervalSeconds": null
 }
 ```
 
@@ -62,6 +68,7 @@ string and is `""` when the user leaves it blank.
 | PUT    | /api/urls/{id}     | Update one of the current user's URLs|
 | DELETE | /api/urls/{id}     | Delete one of the current user's URLs|
 | POST   | /api/urls/{id}/check | Check whether a stored URL is reachable now |
+| GET    | /api/urls/{id}/timeline | Timeline events of a stored URL |
 
 ## 1. Register user
 
@@ -144,6 +151,10 @@ Responses:
 - `400 Bad Request` - validation message.
 - `401 Unauthorized` - not logged in.
 
+Creating a URL also schedules its first check straight away, so a
+`FIRST_CHECK` event (section 10) appears in its timeline within a few seconds
+rather than at the next scheduled pass.
+
 ## 7. Update URL
 
 `PUT /api/urls/{id}` (requires login)
@@ -162,6 +173,10 @@ Responses:
 - `404 Not Found` - no such URL for this user (including other users' URLs).
 - `401 Unauthorized` - not logged in.
 
+Changing `url` to a different address drops that entry's stored timeline and
+schedules a fresh first check, because the old history belongs to the old page.
+Edits that leave `url` unchanged keep the history as it is.
+
 ## 8. Delete URL
 
 `DELETE /api/urls/{id}` (requires login)
@@ -179,13 +194,16 @@ Responses:
 
 Checks whether the stored URL is reachable right now, by issuing one live GET
 request to it from the backend. The request has no body and the response is the
-only place the result exists: **nothing is written to the database**.
+only place the result exists: **nothing is written to the database**, and the
+timeline is not touched. History is maintained by the scheduler alone; read it
+back with `GET /api/urls/{id}/timeline` (section 10).
 
 Consequences for clients:
 
-- `GET /api/urls` has no status field and never triggers a check. A status only
-  exists in the response of this endpoint, so "not checked yet" is a state the
-  frontend owns.
+- `GET /api/urls` reports the outcome of the last *scheduled* check
+  (`lastStatus`, `lastHttpStatus`, `lastCheckedAt`), and this endpoint never
+  changes it. A manual result is a live reading the frontend owns: it is not
+  stored and never appears in the timeline.
 - The endpoint is a POST rather than a GET on purpose: it reaches out to a
   third-party site, so it must not be cached, prefetched, or retried blindly.
 - Every call performs a real outbound request. Calling it from a page-load
@@ -200,7 +218,7 @@ Behaviour:
   refused with `errorType: "BLOCKED_TARGET"` and are never contacted.
 - Follows up to 5 redirects by hand, screening each hop; more gives
   `errorType: "TOO_MANY_REDIRECTS"`.
-- The response body is discarded; only status, timing and final URL are used.
+- The body is read up to 2 MiB and hashed with SHA-256 so `changed` can be reported; this endpoint stores neither the body nor the hash.
 - `2xx` and `3xx` give `status: "UP"`. Everything else gives `status: "DOWN"`.
 - An unreachable target is still `200 OK` with `status: "DOWN"` and a reason in
   `errorType`; it is not an error status of this API.
@@ -216,7 +234,10 @@ Response `200 OK`:
   "httpStatus": 200,
   "responseTimeMs": 183,
   "finalUrl": "https://example.com/",
-  "errorType": null
+  "errorType": null,
+  "contentHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "changed": false,
+  "changeType": null
 }
 ```
 
@@ -229,6 +250,9 @@ Response `200 OK`:
 | responseTimeMs | number | Wall time of the request |
 | finalUrl | string or null | URL after redirects; null when nothing was reached |
 | errorType | string or null | Why the check failed; null when status is `UP` |
+| contentHash | string or null | SHA-256 of the body, present when the probe got a `2xx`/`3xx` response; null otherwise. Informational only, never stored here. |
+| changed | boolean or null | `true` when the body differs from the stored baseline (or there is no baseline yet), `false` when it matches, `null` exactly when `errorType` is set. |
+| changeType | string or null | What the scheduler *would* record for this probe: `FIRST_CHECK`, `CONTENT_CHANGED`, `RECOVERED`, `UNAVAILABLE`; `null` when a successful check found no change. |
 
 `errorType` values: `HTTP_ERROR` (4xx/5xx), `TIMEOUT`, `DNS_ERROR`,
 `SSL_ERROR`, `CONNECTION_REFUSED`, `INVALID_URL`, `BLOCKED_TARGET` (internal
@@ -245,11 +269,108 @@ curl (checks the URL with id 1):
 curl -b cookies.txt -X POST http://localhost:8080/api/urls/1/check
 ```
 
+## 10. URL timeline
+
+`GET /api/urls/{id}/timeline?limit=10` (requires login)
+
+Reads back the history the scheduled checker has recorded for one URL, newest
+event first. Like section 9 this endpoint is read-only, so it is safe to call
+while the scheduler runs and can never conflict with a manual check.
+
+Stored events are capped. Each URL keeps its first event (the `FIRST_CHECK`
+baseline, always `changeNo = 1`) plus the newest 9 events, so at most 10 rows
+are ever held. When a new event would push the count past 10, the oldest
+non-baseline row is deleted in the same transaction as the insert, and the
+baseline is never pruned. `totalCount` counts every event the URL has ever had,
+including pruned ones, so a UI can say "showing 10 of N".
+
+`limit` is optional, defaults to 10, and is clamped to 1-100. The cap on stored
+rows makes a larger `limit` mostly pointless, but it is accepted.
+
+Event types:
+
+| changeType | Meaning |
+| --- | --- |
+| `FIRST_CHECK` | First check after the URL was created; records the baseline hash. |
+| `CONTENT_CHANGED` | A successful check whose body hash differs from the stored one. |
+| `RECOVERED` | A successful check after the previous state was `DOWN`. |
+| `UNAVAILABLE` | The check got no usable response (4xx/5xx or a network error). |
+
+A successful check that returns the same hash stores nothing, and a repeated
+failure with the same status and `errorType` is collapsed into the existing
+`UNAVAILABLE` event instead of adding another. Editing a URL to a *different*
+address clears its timeline and restarts it with a fresh `FIRST_CHECK`.
+
+Response `200 OK`:
+
+```json
+{
+  "urlId": 7,
+  "totalCount": 23,
+  "limit": 10,
+  "events": [
+    {
+      "id": 91,
+      "changeNo": 23,
+      "detectedAt": "2026-09-12T08:00:00.123",
+      "changeType": "CONTENT_CHANGED",
+      "status": "UP",
+      "httpStatus": 200,
+      "errorType": null,
+      "responseTimeMs": 176,
+      "oldHash": "9f86d081884c7d65...",
+      "newHash": "2c26b46b68ffc68f..."
+    },
+    {
+      "id": 88,
+      "changeNo": 21,
+      "detectedAt": "2026-09-11T08:00:00.456",
+      "changeType": "UNAVAILABLE",
+      "status": "DOWN",
+      "httpStatus": 503,
+      "errorType": "HTTP_ERROR",
+      "responseTimeMs": 412,
+      "oldHash": null,
+      "newHash": null
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| urlId | number | The URL the timeline belongs to |
+| totalCount | number | All-time event count, including pruned rows |
+| limit | number | Effective limit applied to `events` |
+| events | array | Newest first, at most `limit` entries |
+| events[].id | number | Row id, usable as a stable list key |
+| events[].changeNo | number | Monotonic per-URL event number; `1` is the baseline |
+| events[].detectedAt | string | When the check ran (server local time, millisecond precision) |
+| events[].changeType | string | `FIRST_CHECK`, `CONTENT_CHANGED`, `RECOVERED`, or `UNAVAILABLE` |
+| events[].status | string | `UP` or `DOWN`, derived from `changeType` so the UI can colour an entry without parsing it |
+| events[].httpStatus | number or null | Response status; null when no response arrived |
+| events[].errorType | string or null | Same values as section 9; set when `changeType` is `UNAVAILABLE` |
+| events[].responseTimeMs | number or null | Wall time of the recorded check |
+| events[].oldHash | string or null | Hash before the event; null for `FIRST_CHECK`, `RECOVERED`, and `UNAVAILABLE` |
+| events[].newHash | string or null | Hash after the event; null for `UNAVAILABLE` |
+
+Responses:
+- `200 OK` - the timeline; `events` may be empty until the scheduler first runs.
+- `401 Unauthorized` - not logged in.
+- `404 Not Found` - no such URL for this user (including other users' URLs).
+
+curl:
+
+```
+curl -b cookies.txt "http://localhost:8080/api/urls/1/timeline?limit=10"
+```
+
 ## Frontend wiring
 
 `frontend/src/api.ts` exposes `registerUser`, `loginUser`, `logoutUser`,
-`fetchCurrentUser`, `fetchUrls`, `createUrl`, `updateUrl`, `deleteUrl`, and
-`checkUrl`. All requests include credentials so the session cookie is sent.
+`fetchCurrentUser`, `fetchUrls`, `createUrl`, `updateUrl`, `deleteUrl`,
+`checkUrl`, and `fetchTimeline`. All requests include credentials so the
+session cookie is sent.
 
 On app load, restore the session:
 
@@ -291,5 +412,16 @@ export function checkUrl(id: number): Promise<CheckResult> {
 }
 ```
 
-`CheckResult` mirrors the JSON in section 9. `MonitoredUrl` carries no status,
-because check results are not stored.
+`CheckResult` mirrors the JSON in section 9. `MonitoredUrl` also carries the
+read-only last-check state (`lastStatus`, `lastHttpStatus`, `lastErrorType`,
+`lastCheckedAt`, `changeCount`), which the scheduler writes and the manual check
+never touches. Fetch the timeline with a separate read:
+
+```ts
+export function fetchTimeline(id: number, limit = 10): Promise<TimelineView> {
+  return request<TimelineView>(`/api/urls/${id}/timeline?limit=${limit}`);
+}
+```
+
+Because the timeline is a plain GET, a collapsed/hidden panel costs nothing:
+load it lazily when the user expands it rather than on app load.

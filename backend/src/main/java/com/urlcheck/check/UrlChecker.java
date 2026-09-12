@@ -1,6 +1,7 @@
 package com.urlcheck.check;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.URI;
@@ -25,8 +26,8 @@ import com.urlcheck.security.SsrfGuard;
  * Performs the actual accessibility probe.
  *
  * <p>Free of persistence and of any knowledge about users: it turns a URL into
- * a {@link CheckResult} and nothing else, so a later scheduled checker can
- * reuse it as is.
+ * a {@link ProbeResult} and nothing else, so the manual check and the
+ * scheduled checker can share it.
  *
  * <p>URLs come from users, so this class is the SSRF boundary: every hop is
  * screened by {@link SsrfGuard} before a request is built. Redirects are
@@ -41,6 +42,8 @@ public class UrlChecker {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
     private static final String USER_AGENT = "UrlCheckBot/0.1";
     private static final String ACCEPT = "*/*";
+    /** Cap on how much of a body is hashed; plenty for change detection. */
+    private static final long MAX_BODY_BYTES = 2L * 1024 * 1024;
     private static final int MAX_REDIRECTS = 5;
     private static final Set<Integer> ALLOWED_PORTS = Set.of(80, 443);
 
@@ -56,10 +59,10 @@ public class UrlChecker {
      * {@link CheckErrorType}. A target that fails the SSRF screen is never
      * contacted and comes back as {@link CheckErrorType#BLOCKED_TARGET}.
      *
-     * <p>The response body is discarded; only the status, timing and final URI
-     * are used.
+     * <p>The body is read up to MAX_BODY_BYTES and hashed with SHA-256; the
+     * status, timing and final URI are still what the verdict is based on.
      */
-    public CheckResult check(Long urlId, String url) {
+    public ProbeResult probe(Long urlId, String url) {
         URI uri = parse(url);
         if (uri == null) {
             return failure(urlId, CheckErrorType.INVALID_URL, 0L);
@@ -80,12 +83,14 @@ public class UrlChecker {
                         .GET()
                         .build();
 
-                HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+                HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                InputStream body = response.body();
                 int httpStatus = response.statusCode();
                 long responseTimeMs = elapsedMillis(startedAt);
 
                 Optional<URI> redirect = nextHop(uri, response);
                 if (redirect.isPresent()) {
+                    body.close();
                     if (redirects >= MAX_REDIRECTS) {
                         return failure(urlId, CheckErrorType.TOO_MANY_REDIRECTS, responseTimeMs);
                     }
@@ -94,14 +99,21 @@ public class UrlChecker {
                 }
 
                 boolean up = httpStatus >= 200 && httpStatus < 400;
-                return new CheckResult(
+                String contentHash;
+                try {
+                    contentHash = up ? ContentHasher.sha256(body, MAX_BODY_BYTES) : null;
+                } finally {
+                    body.close();
+                }
+                return new ProbeResult(
                         urlId,
                         now(),
                         up ? CheckStatus.UP : CheckStatus.DOWN,
                         httpStatus,
                         responseTimeMs,
                         uri.toString(),
-                        up ? null : CheckErrorType.HTTP_ERROR);
+                        up ? null : CheckErrorType.HTTP_ERROR,
+                        contentHash);
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -225,8 +237,8 @@ public class UrlChecker {
         return false;
     }
 
-    private static CheckResult failure(Long urlId, CheckErrorType errorType, long responseTimeMs) {
-        return new CheckResult(urlId, now(), CheckStatus.DOWN, null, responseTimeMs, null, errorType);
+    private static ProbeResult failure(Long urlId, CheckErrorType errorType, long responseTimeMs) {
+        return new ProbeResult(urlId, now(), CheckStatus.DOWN, null, responseTimeMs, null, errorType, null);
     }
 
     private static LocalDateTime now() {

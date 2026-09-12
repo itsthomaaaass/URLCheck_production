@@ -4,6 +4,7 @@ import {
   createUrl,
   deleteUrl,
   fetchCurrentUser,
+  fetchTimeline,
   fetchUrls,
   loginUser,
   logoutUser,
@@ -11,6 +12,8 @@ import {
   updateUrl,
   type CheckResult,
   type MonitoredUrl,
+  type TimelineEvent,
+  type TimelineView,
   type User
 } from "./api";
 
@@ -49,6 +52,91 @@ function describeCheck(result: CheckResult | undefined): string {
   return parts.join(" · ");
 }
 
+const CHANGE_LABELS: Record<TimelineEvent["changeType"], string> = {
+  FIRST_CHECK: "首次检查",
+  CONTENT_CHANGED: "内容变化",
+  RECOVERED: "已恢复",
+  UNAVAILABLE: "无法访问"
+};
+
+/** e.g. "HTTP 200 · 183 ms · 2026/9/12 12:34:56" for one timeline node. */
+function describeEvent(event: TimelineEvent): string {
+  const parts: string[] = [];
+  if (event.errorType) {
+    parts.push(event.errorType);
+  }
+  if (event.httpStatus !== null) {
+    parts.push(`HTTP ${event.httpStatus}`);
+  }
+  if (event.responseTimeMs !== null) {
+    parts.push(`${event.responseTimeMs} ms`);
+  }
+  parts.push(new Date(event.detectedAt).toLocaleString());
+  return parts.join(" · ");
+}
+
+/** One node of the vertical timeline: verdict, change, and why. */
+function TimelineNode({ event }: { event: TimelineEvent }) {
+  const status = event.status.toLowerCase();
+  return (
+    <div className="timeline-node">
+      <span className={`timeline-dot dot-${status}`} />
+      <div className="timeline-body">
+        <span className="timeline-head">
+          <span className={`status-badge status-${status}`}>
+            {STATUS_LABELS[event.status]}
+          </span>
+          <span className={`change-tag change-${event.changeType.toLowerCase()}`}>
+            {CHANGE_LABELS[event.changeType]}
+          </span>
+        </span>
+        <span className="check-detail">{describeEvent(event)}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsible body of one URL timeline. Events arrive newest first; the panel
+ * renders them oldest first so the fixed first-check node sits at the top.
+ * When history has been pruned, that node is pinned and the missing events are
+ * called out between it and the retained tail.
+ */
+function TimelinePanel({
+  view,
+  loading,
+  error
+}: {
+  view: TimelineView | undefined;
+  loading: boolean;
+  error: string | undefined;
+}) {
+  if (loading && !view) {
+    return <p className="timeline-note">加载中…</p>;
+  }
+  if (error) {
+    return <p className="timeline-note timeline-error">{error}</p>;
+  }
+  if (!view || view.events.length === 0) {
+    return <p className="timeline-note">暂无记录。</p>;
+  }
+  const chronological = [...view.events].reverse();
+  const anchor = chronological.find((event) => event.changeNo === 1);
+  const rest = chronological.filter((event) => event !== anchor);
+  const skipped = view.totalCount - chronological.length;
+  return (
+    <div className="timeline">
+      {anchor && <TimelineNode event={anchor} />}
+      {anchor && skipped > 0 && (
+        <p className="timeline-skip">已跳过 {skipped} 条历史记录</p>
+      )}
+      {rest.map((event) => (
+        <TimelineNode key={event.id} event={event} />
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const [urls, setUrls] = useState<MonitoredUrl[]>([]);
   const [user, setUser] = useState<User | null>(null);
@@ -71,6 +159,12 @@ export default function App() {
   // gone after a reload. Both are keyed by url id.
   const [checks, setChecks] = useState<Record<number, CheckResult>>({});
   const [pendingChecks, setPendingChecks] = useState<number[]>([]);
+  // Timeline data is fetched lazily and keyed by url id; it is separate from
+  // the manual check, which never writes to the stored history.
+  const [timelines, setTimelines] = useState<Record<number, TimelineView>>({});
+  const [timelineLoading, setTimelineLoading] = useState<number[]>([]);
+  const [timelineErrors, setTimelineErrors] = useState<Record<number, string>>({});
+  const [expandedTimelines, setExpandedTimelines] = useState<number[]>([]);
 
   async function loadUrls() {
     setUrls(await fetchUrls());
@@ -216,6 +310,46 @@ export default function App() {
       delete next[id];
       return next;
     });
+    setTimelines((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setTimelineErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setExpandedTimelines((prev) => prev.filter((openId) => openId !== id));
+  }
+
+  async function loadTimeline(id: number) {
+    setTimelineErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setTimelineLoading((prev) => [...prev, id]);
+    try {
+      const view = await fetchTimeline(id);
+      setTimelines((prev) => ({ ...prev, [id]: view }));
+    } catch (e) {
+      setTimelineErrors((prev) => ({
+        ...prev,
+        [id]: e instanceof Error ? e.message : "加载失败"
+      }));
+    } finally {
+      setTimelineLoading((prev) => prev.filter((loadingId) => loadingId !== id));
+    }
+  }
+
+  function handleTimelineToggle(id: number) {
+    if (expandedTimelines.includes(id)) {
+      setExpandedTimelines((prev) => prev.filter((openId) => openId !== id));
+      return;
+    }
+    setExpandedTimelines((prev) => [...prev, id]);
+    void loadTimeline(id);
   }
 
   if (checkingAuth) {
@@ -351,46 +485,69 @@ export default function App() {
                 </form>
               ) : (
                 <>
-                  <div className="url-info">
-                    <span className="name">{item.name}</span>
-                    <span className="check-line">
-                      <span
-                        className={`status-badge status-${statusClass(checks[item.id])}`}
-                      >
-                        {statusLabel(checks[item.id], pendingChecks.includes(item.id))}
-                      </span>
-                      {checks[item.id] && (
-                        <span className="check-detail">
-                          {describeCheck(checks[item.id])}
+                  <div className="url-row">
+                    <div className="url-info">
+                      <span className="name">{item.name}</span>
+                      <span className="check-line">
+                        <span
+                          className={`status-badge status-${statusClass(checks[item.id])}`}
+                        >
+                          {statusLabel(checks[item.id], pendingChecks.includes(item.id))}
                         </span>
+                        {checks[item.id] && (
+                          <span className="check-detail">
+                            {describeCheck(checks[item.id])}
+                          </span>
+                        )}
+                      </span>
+                      {item.description !== "" && (
+                        <span className="description">{item.description}</span>
                       )}
-                    </span>
-                    {item.description !== "" && (
-                      <span className="description">{item.description}</span>
-                    )}
-                    <a href={item.url} target="_blank" rel="noreferrer">
-                      {item.url}
-                    </a>
-                  </div>
-                  <div className="url-actions">
-                    <span className="time">
-                      添加于 {new Date(item.createdAt).toLocaleString()}
-                    </span>
-                    <div className="row-actions">
-                      <button
-                        className="check-btn"
-                        onClick={() => handleCheck(item)}
-                        disabled={pendingChecks.includes(item.id)}
-                      >
-                        {pendingChecks.includes(item.id) ? "检查中…" : "检查"}
-                      </button>
-                      <button className="edit-btn" onClick={() => startEdit(item)}>
-                        编辑
-                      </button>
-                      <button className="delete-btn" onClick={() => handleDelete(item)}>
-                        删除
-                      </button>
+                      <a href={item.url} target="_blank" rel="noreferrer">
+                        {item.url}
+                      </a>
                     </div>
+                    <div className="url-actions">
+                      <span className="time">
+                        添加于 {new Date(item.createdAt).toLocaleString()}
+                      </span>
+                      <div className="row-actions">
+                        <button
+                          className="check-btn"
+                          onClick={() => handleCheck(item)}
+                          disabled={pendingChecks.includes(item.id)}
+                        >
+                          {pendingChecks.includes(item.id) ? "检查中…" : "检查"}
+                        </button>
+                        <button className="edit-btn" onClick={() => startEdit(item)}>
+                          编辑
+                        </button>
+                        <button className="delete-btn" onClick={() => handleDelete(item)}>
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="timeline-section">
+                    <button
+                      type="button"
+                      className="timeline-toggle"
+                      onClick={() => handleTimelineToggle(item.id)}
+                      aria-expanded={expandedTimelines.includes(item.id)}
+                    >
+                      <span className={`timeline-caret${expandedTimelines.includes(item.id) ? " open" : ""}`}>▸</span>
+                      时间线
+                      {item.changeCount > 0 && (
+                        <span className="timeline-count">共 {item.changeCount} 条</span>
+                      )}
+                    </button>
+                    {expandedTimelines.includes(item.id) && (
+                      <TimelinePanel
+                        view={timelines[item.id]}
+                        loading={timelineLoading.includes(item.id)}
+                        error={timelineErrors[item.id]}
+                      />
+                    )}
                   </div>
                 </>
               )}

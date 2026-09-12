@@ -75,16 +75,21 @@ h1 {
   margin: 0;
 }
 
-.url-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
+/* The card keeps its old look; the timeline sits below the url row. */
+.url-list > li {
+  display: block;
   background: #fff;
   border: 1px solid #d0d7de;
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin-bottom: 0.5rem;
+}
+
+.url-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
 }
 
 .url-info {
@@ -308,4 +313,145 @@ h1 {
 .check-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.timeline-section {
+  margin-top: 0.6rem;
+  border-top: 1px solid #eaeef2;
+  padding-top: 0.45rem;
+}
+
+.timeline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.35rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #656d76;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.timeline-toggle:hover {
+  background: #f6f8fa;
+  color: #0969da;
+}
+
+.timeline-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.timeline-caret.open {
+  transform: rotate(90deg);
+}
+
+.timeline-count {
+  color: #8c959f;
+}
+
+.timeline {
+  margin-top: 0.5rem;
+  padding-left: 0.15rem;
+}
+
+.timeline-node {
+  position: relative;
+  display: flex;
+  gap: 0.6rem;
+  padding-bottom: 0.75rem;
+}
+
+.timeline-node:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: #d0d7de;
+}
+
+.timeline-dot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #d0d7de;
+}
+
+.dot-up {
+  background: #1a7f37;
+}
+
+.dot-down {
+  background: #cf222e;
+}
+
+.timeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.change-tag {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #eaeef2;
+  color: #656d76;
+}
+
+.change-first_check {
+  background: #ddf4ff;
+  color: #0969da;
+}
+
+.change-content_changed {
+  background: #fff8c5;
+  color: #7d4e00;
+}
+
+.change-recovered {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.change-unavailable {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.timeline-skip {
+  margin: 0 0 0.75rem;
+  padding-left: 1.2rem;
+  color: #8c959f;
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.timeline-note {
+  margin: 0.35rem 0;
+  color: #656d76;
+  font-size: 0.8rem;
+}
+
+.timeline-error {
+  color: #cf222e;
 }

@@ -4,38 +4,55 @@ import java.net.URI;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import com.urlcheck.monitor.UrlCheckRequestedEvent;
 import com.urlcheck.security.SsrfGuard;
 
 @Service
 public class MonitoredUrlService {
 
     private final MonitoredUrlMapper mapper;
+    private final ApplicationEventPublisher events;
 
-    public MonitoredUrlService(MonitoredUrlMapper mapper) {
+    public MonitoredUrlService(MonitoredUrlMapper mapper, ApplicationEventPublisher events) {
         this.mapper = mapper;
+        this.events = events;
     }
 
     public List<MonitoredUrl> findAllForUser(Long userId) {
         return mapper.findAllByUserId(userId);
     }
 
+    @Transactional
     public MonitoredUrl create(Long userId, MonitoredUrl monitoredUrl) {
         validate(monitoredUrl);
         monitoredUrl.setUserId(userId);
         mapper.insert(monitoredUrl);
-        return mapper.findByIdAndUserId(monitoredUrl.getId(), userId);
+        MonitoredUrl created = mapper.findByIdAndUserId(monitoredUrl.getId(), userId);
+        events.publishEvent(new UrlCheckRequestedEvent(created.getId()));
+        return created;
     }
 
+    @Transactional
     public MonitoredUrl update(Long userId, Long id, MonitoredUrl monitoredUrl) {
-        if (mapper.findByIdAndUserId(id, userId) == null) {
+        MonitoredUrl existing = mapper.findByIdAndUserId(id, userId);
+        if (existing == null) {
             throw new NoSuchElementException("URL 不存在: id=" + id);
         }
         validate(monitoredUrl);
         monitoredUrl.setId(id);
         monitoredUrl.setUserId(userId);
         mapper.update(monitoredUrl);
+        if (!existing.getUrl().equals(monitoredUrl.getUrl())) {
+            // The stored history describes the old page, so the edit starts a
+            // new one: drop the timeline and schedule a fresh baseline.
+            mapper.deleteTimeline(id);
+            mapper.resetMonitoringState(id, userId);
+            events.publishEvent(new UrlCheckRequestedEvent(id));
+        }
         return mapper.findByIdAndUserId(id, userId);
     }
 

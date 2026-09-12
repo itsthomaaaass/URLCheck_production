@@ -731,6 +731,12 @@ Response：
 ]
 ```
 
+> Implementation note: the snippets above are sketches. The shipped contract -
+> concrete response fields, event types, and retention rules - is specified in
+> `docs/api.md` (sections 9-10) and `docs/timeline.md`. In particular, the
+> manual check never writes to the database; the timeline is maintained only by
+> the scheduled checker.
+
 ## 24. Frontend 架构
 
 Frontend 使用：

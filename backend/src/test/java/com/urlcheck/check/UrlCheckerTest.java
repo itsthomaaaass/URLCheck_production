@@ -19,7 +19,7 @@ class UrlCheckerTest {
             "example.com/no-scheme"
     })
     void rejectsUrlsThatAreNotHttp(String url) {
-        CheckResult result = checker.check(1L, url);
+        ProbeResult result = checker.probe(1L, url);
         assertThat(result.status()).isEqualTo(CheckStatus.DOWN);
         assertThat(result.errorType()).isEqualTo(CheckErrorType.INVALID_URL);
     }
@@ -35,20 +35,20 @@ class UrlCheckerTest {
             "http://[::1]/"
     })
     void refusesToContactInternalTargets(String url) {
-        CheckResult result = checker.check(1L, url);
+        ProbeResult result = checker.probe(1L, url);
         assertThat(result.status()).isEqualTo(CheckStatus.DOWN);
         assertThat(result.errorType()).isEqualTo(CheckErrorType.BLOCKED_TARGET);
     }
 
     @Test
     void refusesNonWebPorts() {
-        CheckResult result = checker.check(1L, "http://example.com:8080/");
+        ProbeResult result = checker.probe(1L, "http://example.com:8080/");
         assertThat(result.errorType()).isEqualTo(CheckErrorType.BLOCKED_TARGET);
     }
 
     @Test
     void rejectsNullUrl() {
-        CheckResult result = checker.check(1L, null);
+        ProbeResult result = checker.probe(1L, null);
         assertThat(result.errorType()).isEqualTo(CheckErrorType.INVALID_URL);
     }
 }

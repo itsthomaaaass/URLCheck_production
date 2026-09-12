@@ -30,6 +30,9 @@ The complete architecture and design document (in Chinese) lives in
 The implemented HTTP API reference (endpoints, payloads, error responses, and
 frontend wiring) lives in `docs/api.md`.
 
+The scheduled-check and timeline design (cadence, hashing, retention, and event
+semantics) lives in `docs/timeline.md`.
+
 The database schema reference (tables, columns, keys, and relationships)
 lives in `docs/database.md`.
 
@@ -39,8 +42,8 @@ The current vertical slice proves the full chain
 `Frontend -> HTTP API -> Controller -> Service -> DB access -> MySQL` using the
 `monitored_url` entity scoped to the logged-in user: register + login,
 create + list + edit + delete (with an optional free-text `description`), plus
-on-demand accessibility checks. No scheduler, content hashing, or timeline
-logic yet.
+a manual accessibility check, the scheduled content-change detector, and the
+stored timeline it maintains.
 
 Prerequisites: Java 17+ (built/tested on 26), Maven 3.9+, Node.js, and MySQL 8
 reachable at `localhost:3306` (start it with `docker compose up -d mysql`;
@@ -55,10 +58,13 @@ credentials `root`/`root`, database `url_monitor` as configured in
    `mysql --protocol=TCP -h127.0.0.1 -uroot -proot < database/003_change_event_numbering.sql`
    `mysql --protocol=TCP -h127.0.0.1 -uroot -proot < database/004_add_url_description.sql`
    `mysql --protocol=TCP -h127.0.0.1 -uroot -proot < database/005_remove_legacy_owner.sql`
+   `mysql --protocol=TCP -h127.0.0.1 -uroot -proot < database/006_timeline_schedule.sql`
 
-2. Run the backend (port 8080):
+2. Run the backend (port 8080). Activate the `local` profile so the scheduler
+   re-checks every 60 seconds while you test:
 
-   `cd backend && mvn spring-boot:run`
+   `cd backend && SPRING_PROFILES_ACTIVE=local mvn spring-boot:run`
+   (PowerShell: `$env:SPRING_PROFILES_ACTIVE="local"; mvn spring-boot:run`)
 
 3. Run the frontend dev server (port 5173, proxies `/api` to the backend):
 
@@ -151,6 +157,13 @@ Notes:
 | `SESSION_COOKIE_SECURE` | recommended | `true` whenever the app is served over HTTPS. |
 | `SESSION_COOKIE_SAME_SITE` | recommended | `lax` (default) for same-origin. Use `none` when the frontend is on another site, which also requires `SESSION_COOKIE_SECURE=true`. |
 | `SERVER_PORT` | no | Falls back to `PORT` (Render, Railway, Heroku) and then `8080`. |
+| `CHECK_SCHEDULER_ENABLED` | no | `true` (default) starts the background checker. `false` disables all automatic checks. |
+| `CHECK_INTERVAL_SECONDS` | no | How often each URL is re-checked, default `3600` (`60` under the `local` profile). A per-URL override column exists but no UI sets it yet. |
+| `CHECK_SCHEDULER_TICK_SECONDS` | no | How often the scheduler looks for due URLs, default `15`. |
+| `CHECK_SCHEDULER_INITIAL_DELAY_SECONDS` | no | Grace period before the first scheduler pass, default `20`. |
+| `CHECK_BATCH_SIZE` | no | URLs claimed per scheduler pass, default `20`. |
+| `CHANGE_RETENTION_PER_URL` | no | Timeline rows kept per URL, default `10` (baseline plus newest 9). |
+| `CHECK_ON_CREATE` | no | `true` (default) checks a new or edited URL immediately instead of waiting for the next pass. |
 
 If `DB_URL` is unset the backend silently falls back to `localhost:3306`.
 Set the variables explicitly in the target environment so a misconfiguration
@@ -159,6 +172,8 @@ fails loudly instead of quietly pointing at the wrong database.
 ### Schema
 
 Apply the migrations in `database/` in filename order before the first start.
+`006_timeline_schedule.sql` adds the scheduled-check and timeline state to an
+existing database; it is safe to run more than once.
 `001` creates the `url_monitor` database itself, so connect to `defaultdb` for
 that first run and to `url_monitor` afterwards.
 
@@ -187,6 +202,39 @@ Two shapes work:
 - Split origins: build with `VITE_API_BASE_URL=https://api.example.com`, set
   `CORS_ALLOWED_ORIGINS=https://app.example.com`, and set
   `SESSION_COOKIE_SAME_SITE=none` together with `SESSION_COOKIE_SECURE=true`.
+
+### Render (Web Service + Static Site)
+
+`render.yaml` describes both services; the same two can also be created by hand
+in the dashboard.
+
+Backend, a Web Service built from `backend/Dockerfile`:
+
+- Runtime: Docker
+- Dockerfile path: `backend/Dockerfile`
+- Docker build context: `backend`
+- Health check path: `/actuator/health`
+
+Nothing has to be configured for the port: `application.yml` reads `PORT` when
+`SERVER_PORT` is unset.
+
+Frontend, a Static Site built from `frontend/`:
+
+- Build command: `npm ci && npm run build`
+- Publish directory: `dist`
+
+`VITE_API_BASE_URL` is baked in at build time, so changing it needs a rebuild.
+
+`*.onrender.com` subdomains count as separate sites, so this split-origin shape
+needs `CORS_ALLOWED_ORIGINS` on the backend, and
+`SESSION_COOKIE_SAME_SITE=none` together with `SESSION_COOKIE_SECURE=true`.
+
+Apply `database/006_timeline_schedule.sql` before the first deploy of this
+branch: the scheduler and the timeline need it. It is safe to re-run.
+
+Two Render behaviours to plan around: sessions are held in memory, so a
+redeploy logs every user out; and a free instance spins down when idle, which
+stops the scheduler until the next request wakes it.
 
 ### Before going live
 
