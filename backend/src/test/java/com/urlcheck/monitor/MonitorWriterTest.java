@@ -59,14 +59,34 @@ class MonitorWriterTest {
     }
 
     @Test
-    void aFailureWithANewSignatureIsRecorded() {
+    void aFailureWhileTheUrlStaysDownIsNotRecordedAgain() {
         MonitoredUrl state = state("kept", "DOWN", 403, "HTTP_ERROR");
-        ProbeResult probe = httpError(500);
+        ProbeResult probe = timeout();
         apply(state, probe);
 
-        verify(timelineMapper).insertEvent(7L, "UNAVAILABLE", "kept", null, 500, "HTTP_ERROR", 12L);
+        verifyNoEventWritten();
+        verify(monitorMapper).markDown(7L, null, "TIMEOUT", 0);
+    }
+
+    @Test
+    void aRepeatedTimeoutIsNotRecordedAgain() {
+        MonitoredUrl state = state("kept", "DOWN", null, "TIMEOUT");
+        ProbeResult probe = timeout();
+        apply(state, probe);
+
+        verifyNoEventWritten();
+        verify(monitorMapper).markDown(7L, null, "TIMEOUT", 0);
+    }
+
+    @Test
+    void theFirstFailureAfterAHealthyCheckIsRecorded() {
+        MonitoredUrl state = state("kept", "UP", 200, null);
+        ProbeResult probe = timeout();
+        apply(state, probe);
+
+        verify(timelineMapper).insertEvent(7L, "UNAVAILABLE", "kept", null, null, "TIMEOUT", 5000L);
         verify(timelineMapper).prune(7L, 9);
-        verify(monitorMapper).markDown(7L, 500, "HTTP_ERROR", 1);
+        verify(monitorMapper).markDown(7L, null, "TIMEOUT", 1);
     }
 
     @Test
@@ -110,5 +130,10 @@ class MonitorWriterTest {
     private static ProbeResult httpError(int status) {
         return new ProbeResult(7L, LocalDateTime.now(), CheckStatus.DOWN, status, 12,
                 "https://example.com/", CheckErrorType.HTTP_ERROR, null);
+    }
+
+    private static ProbeResult timeout() {
+        return new ProbeResult(7L, LocalDateTime.now(), CheckStatus.DOWN, null, 5000,
+                null, CheckErrorType.TIMEOUT, null);
     }
 }

@@ -27,19 +27,6 @@ public final class ChangeDetector {
                 ? new ChangeDecision(null, CheckStatus.UP, Boolean.FALSE)
                 : new ChangeDecision(ChangeType.CONTENT_CHANGED, CheckStatus.UP, Boolean.TRUE);
     }
-    /**
-     * True when the probe failed exactly like the stored state, so another
-     * event would only repeat the previous one. Storage policy, but it reasons
-     * about check semantics, so it lives next to the rule above.
-     */
-    public static boolean sameFailureAsLast(ChangeBaseline baseline, ProbeResult probe) {
-        if (probe.errorType() == null || !baseline.lastStateDown()) {
-            return false;
-        }
-        return Objects.equals(baseline.lastHttpStatus(), probe.httpStatus())
-                && Objects.equals(baseline.lastErrorType(), probe.errorType().name());
-    }
-
     private ChangeDetector() {
     }
 }

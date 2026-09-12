@@ -57,7 +57,7 @@ recorded answer can never drift apart, but only the scheduled side persists it.
 | `FIRST_CHECK` | The URL had no stored hash and this probe succeeded | yes |
 | `CONTENT_CHANGED` | The probe succeeded and its hash differs from the stored one | no |
 | `RECOVERED` | The probe succeeded after the stored state was `DOWN` | no |
-| `UNAVAILABLE` | The probe produced no usable response (4xx/5xx or a network error) and the stored failure signature differs | no |
+| `UNAVAILABLE` | The probe produced no usable response (4xx/5xx or a network error) and the stored state was not already `DOWN` | no |
 
 - Nothing is written for "no change". That verdict exists only in the live
   response of a check, never as a row.
@@ -72,14 +72,17 @@ recorded answer can never drift apart, but only the scheduled side persists it.
 | no hash | success | `FIRST_CHECK` | `true` |
 | hash equal | success | none | `false` |
 | hash differs | success | `CONTENT_CHANGED` | `true` |
-| any | 4xx/5xx or network error | `UNAVAILABLE` (deduped) | `null` |
+| any | 4xx/5xx or network error | `UNAVAILABLE`, once per outage | `null` |
 | `DOWN` | success | `RECOVERED` | `true` |
 
 - On failure the stored hash is kept, so a later recovery still has something to
   compare against, and `changed` is `null` rather than a misleading `false`.
-- A failure is only recorded when it differs from the stored one
-  (`http_status` + `error_type`). A page that returns 403 for a month produces
-  one row, not one per check.
+- A failure is recorded once per outage, when the URL goes from up (or never
+  checked) to down. While the stored state is already `DOWN`, another failed
+  probe only refreshes `last_http_status` / `last_error_type`, so a page that
+  returns 403 for a month - or that keeps timing out, or flaps between a
+  timeout and a 503 - produces one row, not one per check. A recovery is
+  always its own event, even when the body is unchanged.
 - A body that cannot be read at all is a failure (`IO_ERROR`), not a silent
   "unchanged".
 ## Retention: the first check plus the nine newest events

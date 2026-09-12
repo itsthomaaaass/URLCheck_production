@@ -39,9 +39,7 @@ public class CheckService {
         ProbeResult probe = urlChecker.probe(monitoredUrl.getId(), monitoredUrl.getUrl());
         ChangeBaseline baseline = new ChangeBaseline(
                 monitoredUrl.getContentHash(),
-                monitoredUrl.getLastStatus(),
-                monitoredUrl.getLastHttpStatus(),
-                monitoredUrl.getLastErrorType());
+                monitoredUrl.getLastStatus());
         ChangeDecision decision = ChangeDetector.decide(baseline, probe);
         return new CheckResult(
                 probe.urlId(),

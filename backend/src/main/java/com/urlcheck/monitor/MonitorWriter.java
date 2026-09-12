@@ -5,7 +5,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.urlcheck.check.ChangeBaseline;
 import com.urlcheck.check.ChangeDecision;
-import com.urlcheck.check.ChangeDetector;
 import com.urlcheck.check.ChangeType;
 import com.urlcheck.check.CheckStatus;
 import com.urlcheck.check.ProbeResult;
@@ -36,9 +35,13 @@ public class MonitorWriter {
     @Transactional
     public void apply(MonitoredUrl state, ProbeResult probe, ChangeDecision decision,
             ChangeBaseline baseline) {
+        // An outage is one event: it is recorded when the URL goes down, and
+        // while it stays down another failed probe only refreshes the stored
+        // reason. Comparing the failure signatures instead would append a row
+        // every time a site that never recovered flapped between, say, a
+        // timeout and a 503.
         boolean event = decision.type() != null
-                && !(decision.type() == ChangeType.UNAVAILABLE
-                        && ChangeDetector.sameFailureAsLast(baseline, probe));
+                && !(decision.type() == ChangeType.UNAVAILABLE && baseline.lastStateDown());
         if (event) {
             timelineMapper.insertEvent(
                     state.getId(),

@@ -75,10 +75,6 @@ public class MonitorRunner {
     }
 
     static ChangeBaseline baselineOf(MonitoredUrl state) {
-        return new ChangeBaseline(
-                state.getContentHash(),
-                state.getLastStatus(),
-                state.getLastHttpStatus(),
-                state.getLastErrorType());
+        return new ChangeBaseline(state.getContentHash(), state.getLastStatus());
     }
 }
