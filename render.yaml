@@ -32,7 +32,28 @@ services:
       # https://url-check-frontend.onrender.com
       - key: CORS_ALLOWED_ORIGINS
         sync: false
-      # Keep the JVM inside a small plan's memory budget.
+      # AI assistant. On by default as soon as AI_API_KEY is set, so the key
+      # alone is enough; set AI_ENABLED to "false" to keep the assistant off
+      # even with a key present. Leave the base URL and the model blank to use
+      # the defaults (DeepSeek, deepseek-flash).
+      - key: AI_ENABLED
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        sync: false
+      - key: AI_MODEL
+        sync: false
+      # Knowledge base (RAG). Off unless AI_KNOWLEDGE_ENABLED is set to true, so
+      # the two secrets below are only read when it is on.
+      - key: AI_KNOWLEDGE_ENABLED
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      # Keep the JVM inside a small plan's memory budget. The embedding model is
+      # local, so the knowledge base adds no external inference cost.
       - key: JAVA_OPTS
         value: -XX:MaxRAMPercentage=75.0
 

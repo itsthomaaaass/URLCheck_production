@@ -2,7 +2,8 @@
 
 This document describes the HTTP endpoints currently implemented by the backend
 (Spring Boot, port 8080). It is the source of truth for wiring the frontend.
-See `docs/design.md` (section 23) for the full planned API surface.
+See `docs/design.md` (section 16) for the API summary in context of the system
+design.
 
 ## Base URL and conventions
 
@@ -13,6 +14,11 @@ See `docs/design.md` (section 23) for the full planned API surface.
 - Request and response bodies are JSON (`Content-Type: application/json`).
 - The session cookie (`JSESSIONID`) identifies the current user. URL endpoints
   return `401 {"message": "请先登录"}` without a valid session.
+- The session cookie is `HttpOnly`. Its `SameSite` and `Secure` flags come from
+  `SESSION_COOKIE_SAME_SITE` (default `lax`) and `SESSION_COOKIE_SECURE`
+  (default `false`; set `true` behind HTTPS). A frontend served from a
+  different origin must also list its origin in `CORS_ALLOWED_ORIGINS` (the
+  backend writes no CORS headers when it is empty).
 - A monitored URL (`MonitoredUrl`) is serialized as:
 
 ```json
@@ -54,6 +60,7 @@ string and is `""` when the user leaves it blank.
   - `401 Unauthorized` - not logged in.
   - `404 Not Found` - the resource does not exist or is not owned by the user.
   - `409 Conflict` - username already taken.
+  - `503 Service Unavailable` - the AI assistant could not reach its provider.
 
 ## Endpoint summary
 
@@ -69,6 +76,11 @@ string and is `""` when the user leaves it blank.
 | DELETE | /api/urls/{id}     | Delete one of the current user's URLs|
 | POST   | /api/urls/{id}/check | Check whether a stored URL is reachable now |
 | GET    | /api/urls/{id}/timeline | Timeline events of a stored URL |
+| POST   | /api/ai/chat       | Ask the AI assistant (optional feature) |
+| POST   | /api/ai/conversations | Open an empty conversation (optional feature) |
+| GET    | /api/ai/conversations | List the current user's conversations (optional feature) |
+| GET    | /api/ai/conversations/{id} | One conversation and its messages (optional feature) |
+| DELETE | /api/ai/conversations/{id} | Delete a conversation and its messages (optional feature) |
 
 ## 1. Register user
 
@@ -365,12 +377,225 @@ curl:
 curl -b cookies.txt "http://localhost:8080/api/urls/1/timeline?limit=10"
 ```
 
+## 11. AI assistant chat
+
+Natural-language interface to the endpoints above, described in
+`docs/ai_assistant_feature_design.md`. It is **off unless configured**: the
+endpoints exist as soon as a credential is set, so a deployment with no LLM key
+exposes nothing under `/api/ai`. `AI_ENABLED=false` keeps them hidden even with
+a key; `AI_ENABLED=true` demands one.
+
+The user is taken from the session, exactly as for the endpoints above, and is
+never taken from the request body. The assistant's tools can only reach the
+signed-in user's URLs.
+
+### Configuration
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AI_ENABLED` | (unset) | Unset exposes the endpoints whenever `AI_API_KEY` is set. `false` hides them even with a key; `true` demands a key. |
+| `AI_API_KEY` | (empty) | Provider credential, kept on the backend. Setting it exposes the endpoints. `AI_ENABLED=true` without it makes the app refuse to start. |
+| `AI_BASE_URL` | `https://api.deepseek.com` | Any OpenAI-compatible API root. |
+| `AI_MODEL` | `deepseek-flash` | Must support tool calling, or every answer fails. |
+| `AI_TEMPERATURE` | `0.2` | |
+| `AI_MAX_TOKENS` | `1024` | Caps the length of one answer. |
+| `AI_MAX_RETRIES` | `2` | Retries a rate-limited provider call. |
+| `AI_TIMEOUT_SECONDS` | `60` | How long one provider call may take. |
+| `AI_MAX_URLS_PER_CHECK` | `10` | URLs probed per `checkUrls` call. Each one is really fetched, so this bounds the latency of one answer. |
+| `AI_MEMORY_MAX_MESSAGES` | `20` | Messages of a conversation replayed to the model as context. Bounds the prompt of a long conversation. |
+| `AI_MAX_CONVERSATIONS` | `5` | Conversations kept per user. Past this, the least recently used conversation and its messages are deleted. |
+
+For OpenAI itself, set `AI_BASE_URL=https://api.openai.com/v1` and
+`AI_MODEL=gpt-4o-mini`.
+
+### Knowledge base (RAG)
+
+The assistant can also answer questions about how URLCheck itself works
+(change detection, the checker, the timeline, authentication, the database,
+the API). That documentation is not an endpoint: it is a **tool**,
+`searchKnowledge`, which the model calls when a question is about the
+application. The system prompt tells it to search the knowledge base before
+claiming something is unsupported.
+
+The documents are Markdown files that ship inside the jar
+(`backend/src/main/resources/ai/knowledge/`, currently written in Chinese) and
+are embedded at startup into Qdrant by a model that runs locally in the
+backend (`bge-small-zh-v1.5`, ONNX) - there is no external embedding API.
+Ingestion is incremental: a SHA-256 ledger in MySQL means unchanged documents
+cost nothing on restart. Operation details are in `docs/knowledge_base.md`.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AI_KNOWLEDGE_ENABLED` | `false` | Must be `true` to turn the knowledge base on; requires Qdrant. |
+| `AI_KNOWLEDGE_INGEST_ON_START` | `true` | Compare the documents with the hash ledger at startup and embed only changed ones. |
+| `QDRANT_URL` / `QDRANT_API_KEY` | (empty) | Qdrant connection; read only when the knowledge base is on. |
+| `QDRANT_COLLECTION` | `urlcheck_knowledge` | The Qdrant collection, created on first run. |
+| `AI_KNOWLEDGE_TOP_K` | `4` | Passages returned per search. |
+| `AI_KNOWLEDGE_SIMILARITY_THRESHOLD` | `0.5` | Minimum cosine similarity worth showing the model. |
+| `AI_KNOWLEDGE_MAX_CHUNK_CHARS` | `800` | Chunk size the documents are split into. |
+
+### POST /api/ai/chat
+
+One question, one answer. `message` is required unless `confirmationToken` is
+sent.
+
+Request:
+
+```json
+{ "conversationId": 101, "message": "Which of my URLs are inaccessible?" }
+```
+
+`conversationId` is optional. Sent, the message continues that conversation and
+the assistant resolves follow-ups such as "how often should I check it?" against
+what was already said. Left out, the message opens a new conversation.
+
+Response:
+
+```json
+{
+  "conversationId": 101,
+  "message": "2 of your 5 URLs are inaccessible: University and Research.",
+  "confirmation": null
+}
+```
+
+`message` is the assistant's answer, written in the language the user used.
+`conversationId` is the conversation the turn was recorded in: the one that was
+sent, or the one this message opened. Send it back to continue the thread.
+
+Both the question and the answer are stored in the conversation's history, so a
+client can read them back from `GET /api/ai/conversations/{id}`. A provider
+failure still stores the question, so nothing the user typed is lost.
+
+### Confirming a deletion
+
+Deletion is never carried out on the assistant's word. When the model asks to
+delete something, nothing is removed: the backend records what would go against
+the session and returns it as `confirmation`.
+
+```json
+{
+  "message": "I found 2 URLs that are inaccessible. Deleting them removes them permanently. Shall I continue?",
+  "confirmation": {
+    "token": "9f2c...",
+    "urls": [
+      { "id": 3, "name": "University", "url": "https://university.edu" },
+      { "id": 5, "name": "Research", "url": "https://research.example" }
+    ]
+  }
+}
+```
+
+Send the token back to carry it out:
+
+```json
+{ "confirmationToken": "9f2c..." }
+```
+
+The reply then reports the outcome, without asking the model again:
+
+```json
+{ "message": "已删除 2 个 URL：University、Research。", "confirmation": null }
+```
+
+Rules for the frontend:
+
+- Show a confirm/cancel prompt whenever `confirmation` is non-null. On confirm,
+  send the token only; do not re-send the original `message`.
+- The token is single-use and bound to the session. A second attempt, another
+  session's token, or an expired one answers
+  `400 {"message": "确认已过期，请重新发起删除请求"}`.
+- Never pass `confirmation.urls` to `DELETE /api/urls/{id}` yourself. Send the
+  token, so the rows acted on are the ones the backend recorded.
+- Keep the `conversationId` from each answer and send it with the next message,
+  so follow-ups like "now check it" resolve against the thread. A client that
+  sends none opens a new conversation every time, and the retention cap (5 by
+  default) then discards older ones.
+- A conversation that belongs to another user answers `404`, exactly as one that
+  does not exist: the API never confirms a stranger's conversation is real.
+
+### Failures
+
+| Status | Meaning |
+| --- | --- |
+| `503` | The provider could not be reached or refused the request (`{"message": "AI 助手暂时不可用，请稍后再试"}`). The rest of the API is unaffected. |
+| `400` | Empty `message`, or a confirmation token that is unknown or already used. |
+| `401` | Not logged in, as for every other authenticated endpoint. |
+| `404` | A conversation that does not exist, or is not the current user's. |
+
+Free provider tiers rate-limit aggressively. `AI_MAX_RETRIES` covers the
+occasional `429`, but a busy or slow model can still end in a `503`.
+
+### Conversation history
+
+The assistant keeps a per-user conversation history in MySQL, so a client can
+show past threads and continue one. It is bounded: only the most recently *used*
+`AI_MAX_CONVERSATIONS` conversations are kept (5 by default). Opening one past
+that deletes the least recently used conversation and its messages. Activity,
+not creation time, decides which is "recent", so a thread the user returns to
+becomes recent again.
+
+The full reasoning is in `docs/ai_context_design.md` (section 23).
+
+#### POST /api/ai/conversations
+
+Opens an empty conversation. The chat endpoint opens one by itself when a message
+arrives without an id, so this is only for a client that wants the thread to exist
+before the user has typed anything.
+
+Response:
+
+```json
+{ "id": 101, "title": "新对话" }
+```
+
+#### GET /api/ai/conversations
+
+This user's conversations, most recent activity first.
+
+```json
+[
+  { "id": 101, "title": "URL monitoring", "updatedAt": "2026-09-17T18:30:00" },
+  { "id": 102, "title": "Troubleshooting", "updatedAt": "2026-09-16T14:20:00" }
+]
+```
+
+A title comes from the first user message, cut to a readable length. A
+conversation that has no messages yet is titled `新对话`.
+
+#### GET /api/ai/conversations/{id}
+
+One conversation and its stored history, oldest message first.
+
+```json
+{
+  "id": 101,
+  "title": "URL monitoring",
+  "messages": [
+    { "role": "USER", "content": "What is URL monitoring?" },
+    { "role": "ASSISTANT", "content": "URL monitoring periodically checks a URL..." }
+  ]
+}
+```
+
+A question whose provider call failed appears here with no answer after it.
+
+#### DELETE /api/ai/conversations/{id}
+
+Deletes the conversation and its messages. Answers `204 No Content`, or `404`
+when the conversation does not exist or belongs to somebody else.
+
 ## Frontend wiring
 
 `frontend/src/api.ts` exposes `registerUser`, `loginUser`, `logoutUser`,
 `fetchCurrentUser`, `fetchUrls`, `createUrl`, `updateUrl`, `deleteUrl`,
 `checkUrl`, and `fetchTimeline`. All requests include credentials so the
 session cookie is sent.
+
+The assistant adds `chatWithAssistant`, `fetchConversations`,
+`fetchConversation`, and `deleteConversation`. `chatWithAssistant` takes the
+open conversation's id, or `null` to let the backend open a thread and name it
+after the first message; its answer carries the id back.
 
 On app load, restore the session:
 

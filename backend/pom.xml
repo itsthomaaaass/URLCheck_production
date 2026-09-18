@@ -18,7 +18,25 @@
     <properties>
         <java.version>26</java.version>
         <mybatis-spring-boot.version>4.1.0</mybatis-spring-boot.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <!-- The two libraries the local embedding model is built from. Both
+             versions are the ones spring-ai-transformers itself depends on, so
+             the pair is known to work together. -->
+        <onnxruntime.version>1.21.1</onnxruntime.version>
+        <djl-tokenizers.version>0.36.0</djl-tokenizers.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -39,6 +57,50 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- AI assistant: OpenAI-compatible chat model plus the ChatClient API.
+             The provider is chosen by configuration (app.ai.*), not by the
+             dependency, so the same build can point at OpenAI, OpenRouter or a
+             self-hosted OpenAI-compatible endpoint. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+
+        <!-- Knowledge base (RAG). spring-ai-vector-store is the VectorStore
+             API, spring-ai-qdrant-store its Qdrant implementation (which brings
+             the Qdrant gRPC client with it).
+
+             The embedding model runs in this process, so it needs neither a
+             provider nor a key: ONNX Runtime executes the model and the DJL
+             tokenizer turns text into the ids the model expects.
+             spring-ai-transformers ships an ONNX embedding model too, but it
+             pools through DJL's NDManager, which needs a full DJL engine and
+             downloads that engine's native libraries at runtime;
+             com.urlcheck.ai.knowledge.embedding uses these two directly. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-qdrant-store</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>${onnxruntime.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.djl.huggingface</groupId>
+            <artifactId>tokenizers</artifactId>
+            <version>${djl-tokenizers.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

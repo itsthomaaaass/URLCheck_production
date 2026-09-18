@@ -35,10 +35,70 @@ app:
     enabled: ${CHECK_SCHEDULER_ENABLED:true}
     tick-seconds: ${CHECK_SCHEDULER_TICK_SECONDS:15}
     initial-delay-seconds: ${CHECK_SCHEDULER_INITIAL_DELAY_SECONDS:20}
-    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:3600}
+    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:900}
     batch-size: ${CHECK_BATCH_SIZE:20}
     retention-per-url: ${CHANGE_RETENTION_PER_URL:10}
     on-create: ${CHECK_ON_CREATE:true}
+
+  # AI assistant. On as soon as a provider key is present: AI_API_KEY alone is
+  # enough to deploy it, and a deployment with no key behaves exactly as it did
+  # before. AI_ENABLED overrides that in both directions - false keeps it off
+  # even with a key, true demands a key and fails at startup without one. The
+  # endpoint, the credential and the model are all environment variables, so the
+  # provider can be changed without a rebuild; see
+  # docs/ai_assistant_feature_design.md.
+  #
+  # Defaults point at DeepSeek, whose OpenAI-compatible endpoint this project
+  # uses. For OpenAI itself, set
+  #   AI_BASE_URL=https://api.openai.com/v1  AI_MODEL=gpt-4o-mini
+  # The model must support tool calling, or every answer fails.
+  ai:
+    enabled: ${AI_ENABLED:}
+    base-url: ${AI_BASE_URL:https://api.deepseek.com}
+    api-key: ${AI_API_KEY:}
+    model: ${AI_MODEL:deepseek-flash}
+    temperature: ${AI_TEMPERATURE:0.2}
+    max-tokens: ${AI_MAX_TOKENS:1024}
+    max-retries: ${AI_MAX_RETRIES:2}
+    timeout-seconds: ${AI_TIMEOUT_SECONDS:60}
+    # Each URL is really fetched, so a large account makes one answer slow.
+    max-urls-per-check: ${AI_MAX_URLS_PER_CHECK:10}
+    # Conversation history: how many messages of the conversation are replayed
+    # to the model as context, and how many conversations a user keeps. Older
+    # conversations, and the messages in them, are deleted. See
+    # docs/ai_context_design.md.
+    memory-max-messages: ${AI_MEMORY_MAX_MESSAGES:20}
+    max-conversations: ${AI_MAX_CONVERSATIONS:5}
+
+    # Knowledge base (RAG): answers questions about how URLCheck itself works,
+    # from the Markdown documents in src/main/resources/ai/knowledge/. Off
+    # unless AI_KNOWLEDGE_ENABLED is true, so a deployment that has not set up
+    # Qdrant behaves exactly as before. The embedding model runs inside the
+    # backend and ships in the jar, so the only credential here is Qdrant's;
+    # see docs/RAG_design.md.
+    knowledge:
+      enabled: ${AI_KNOWLEDGE_ENABLED:false}
+      # Compare the knowledge files with the ledger when the application
+      # starts. Unchanged files cost nothing, so restarts never re-embed.
+      ingest-on-start: ${AI_KNOWLEDGE_INGEST_ON_START:true}
+      collection-name: ${QDRANT_COLLECTION:urlcheck_knowledge}
+      # Where the documents are. The default is the shipped set.
+      location: 'classpath*:ai/knowledge/**/*.md'
+      top-k: ${AI_KNOWLEDGE_TOP_K:4}
+      # Minimum cosine similarity worth showing the model. A question the
+      # documentation does not answer should retrieve nothing.
+      similarity-threshold: ${AI_KNOWLEDGE_SIMILARITY_THRESHOLD:0.5}
+      max-chunk-characters: ${AI_KNOWLEDGE_MAX_CHUNK_CHARS:800}
+      qdrant:
+        url: ${QDRANT_URL:}
+        api-key: ${QDRANT_API_KEY:}
+      embedding:
+        model: classpath:ai/models/bge-small-zh-v1.5/model_quantized.onnx
+        tokenizer: classpath:ai/models/bge-small-zh-v1.5/tokenizer.json
+        # The model's vector width. It also fixes the Qdrant collection size,
+        # which cannot be changed later without recreating the collection.
+        dimensions: 512
+        max-sequence-length: 512
 
 # Health probe for the hosting platform (Render). Only the health endpoint is
 # exposed over HTTP; it includes the datasource, so a broken database fails the

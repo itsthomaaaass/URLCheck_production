@@ -119,7 +119,7 @@ overlap itself, and a slow batch delays the next tick instead of piling up.
 | `CHECK_SCHEDULER_ENABLED` | `true` | Set `false` to stop all automatic checks (tests, local dev). |
 | `CHECK_SCHEDULER_TICK_SECONDS` | `15` | How often due URLs are looked for. Keep it at or below the smallest interval. |
 | `CHECK_SCHEDULER_INITIAL_DELAY_SECONDS` | `20` | Grace period after startup before the first tick. |
-| `CHECK_INTERVAL_SECONDS` | `3600` | Per-URL cadence unless the row overrides it. |
+| `CHECK_INTERVAL_SECONDS` | `900` | Per-URL cadence unless the row overrides it. |
 | `CHECK_BATCH_SIZE` | `20` | URLs checked per tick, bounding one burst. |
 | `CHANGE_RETENTION_PER_URL` | `10` | Rows kept per URL, anchor included. |
 | `CHECK_ON_CREATE` | `true` | Check a new (or re-pointed) URL immediately instead of waiting for a tick. |

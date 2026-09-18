@@ -19,6 +19,10 @@ Schema changes live in `database/` and are applied in filename order:
 - `005_remove_legacy_owner.sql` - removes the legacy bootstrap user.
 - `006_timeline_schedule.sql` - adds the monitoring-state columns to
   `monitored_url` and the detail columns to `changes`.
+- `007_ai_conversations.sql` - adds `conversation` and `chat_message`, the AI
+  assistant's conversation history.
+- `008_ai_knowledge.sql` - adds `ai_knowledge_document`, the hash ledger of the
+  AI assistant's knowledge base (RAG).
 
 All application tables use `InnoDB` with character set `utf8mb4` and collation
 `utf8mb4_unicode_ci`.
@@ -30,6 +34,8 @@ users          1:N  monitored_url
 monitored_url  1:N  checks
 monitored_url  1:N  changes
 checks         1:N  changes        (changes.check_id is nullable)
+users          1:N  conversation
+conversation   1:N  chat_message
 ```
 
 | Child | Column | Parent | On delete |
@@ -38,9 +44,12 @@ checks         1:N  changes        (changes.check_id is nullable)
 | `checks` | `url_id` | `monitored_url(id)` | `CASCADE` |
 | `changes` | `url_id` | `monitored_url(id)` | `CASCADE` |
 | `changes` | `check_id` | `checks(id)` | `SET NULL` |
+| `conversation` | `user_id` | `users(id)` | `CASCADE` |
+| `chat_message` | `conversation_id` | `conversation(id)` | `CASCADE` |
 
 Constraint names: `fk_monitored_url_user`, `fk_checks_monitored_url`,
-`fk_changes_monitored_url`, `fk_changes_check`.
+`fk_changes_monitored_url`, `fk_changes_check`, `fk_conversation_user`,
+`fk_chat_message_conversation`.
 
 ## users
 
@@ -132,3 +141,76 @@ Foreign keys:
 - `fk_changes_monitored_url` - `url_id` -> `monitored_url(id)`,
   `ON DELETE CASCADE`
 - `fk_changes_check` - `check_id` -> `checks(id)`, `ON DELETE SET NULL`
+
+## conversation
+
+One chat thread per row, owned by one user. The AI assistant's conversation
+history; see `docs/ai_context_design.md`.
+
+| Column | Type | Null | Default | Notes |
+| --- | --- | --- | --- | --- |
+| id | bigint unsigned | NO | auto | Primary key |
+| user_id | bigint unsigned | NO | - | FK to users.id |
+| title | varchar(100) | NO | - | Taken from the first user message |
+| created_at | datetime(6) | NO | CURRENT_TIMESTAMP(6) | |
+| updated_at | datetime(6) | NO | CURRENT_TIMESTAMP(6) | Last activity; retention is ordered by it |
+
+Indexes:
+- `PRIMARY KEY (id)`
+- `KEY idx_conversation_user_updated (user_id, updated_at)`
+
+Foreign keys:
+- `fk_conversation_user` - `user_id` -> `users(id)`, `ON DELETE CASCADE`
+
+> A user keeps only the most recently used
+> `app.ai.max-conversations` conversations (`AI_MAX_CONVERSATIONS`, default 5).
+> The rest are deleted by `ConversationService`; the index above is the one that
+> finds them.
+
+## chat_message
+
+One row per message: the complete history of a conversation, in insertion order.
+
+| Column | Type | Null | Default | Notes |
+| --- | --- | --- | --- | --- |
+| id | bigint unsigned | NO | auto | Primary key; also the conversation order |
+| conversation_id | bigint unsigned | NO | - | FK to conversation.id |
+| role | varchar(16) | NO | - | `USER` or `ASSISTANT` |
+| content | text | NO | - | Message text |
+| created_at | datetime(6) | NO | CURRENT_TIMESTAMP(6) | |
+
+Indexes:
+- `PRIMARY KEY (id)`
+- `KEY idx_chat_message_conversation (conversation_id, id)`
+
+Foreign keys:
+- `fk_chat_message_conversation` - `conversation_id` -> `conversation(id)`,
+  `ON DELETE CASCADE`
+
+> These rows are the record the user reads. The model is only shown a bounded
+> window of them (`AI_MEMORY_MAX_MESSAGES`, default 20), held in Spring AI's
+> `ChatMemory` and rebuilt from this table, not stored separately.
+
+## ai_knowledge_document
+
+One row per knowledge document of the AI assistant's RAG knowledge base. This
+is the change-detection ledger: ingestion compares the SHA-256 of every file
+under `backend/src/main/resources/ai/knowledge/` with this table and re-embeds
+only what changed, which is what makes a restart free. The vectors themselves
+live in Qdrant, not here. See `docs/knowledge_base.md`.
+
+| Column | Type | Null | Default | Notes |
+| --- | --- | --- | --- | --- |
+| id | bigint unsigned | NO | auto | Primary key |
+| document | varchar(255) | NO | - | Path relative to `ai/knowledge/`, e.g. `business/change-detection.md`; the natural key, so a rename is a delete plus an add |
+| content_hash | char(64) | NO | - | SHA-256 of the file's bytes, hex |
+| chunk_count | int unsigned | NO | 0 | How many vectors the document was split into |
+| embedded_at | datetime(6) | NO | CURRENT_TIMESTAMP(6) | When the document was last embedded |
+
+Indexes:
+- `PRIMARY KEY (id)`
+- `UNIQUE uq_ai_knowledge_document (document)`
+
+The table is standalone: no foreign keys to the application tables. Deleting
+its rows makes the ingestor re-embed every document, which is the documented
+way to rebuild a lost Qdrant index.

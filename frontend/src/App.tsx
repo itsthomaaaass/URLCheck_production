@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import AiChat from "./AiChat";
 import {
   checkUrl,
   createUrl,
@@ -555,6 +556,7 @@ export default function App() {
           ))}
         </ul>
       )}
+      <AiChat onUrlsChanged={loadUrls} />
     </main>
   );
 }

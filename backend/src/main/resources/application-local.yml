@@ -1,9 +1,12 @@
 # Local development profile.
 #
-# Identical to application.yml except the scheduler re-checks every URL once a
-# minute, so the timeline fills in quickly while testing. Activate it with
-# SPRING_PROFILES_ACTIVE=local (or --spring.profiles.active=local). Setting the
-# CHECK_INTERVAL_SECONDS environment variable still overrides this value.
+# It no longer overrides the scheduler. The old override re-checked every URL
+# once a minute "so the timeline fills in quickly while testing", which is
+# exactly what gave pages with any dynamic markup (GitHub, Google) a
+# CONTENT_CHANGED row in their timeline every minute. Local now follows the
+# application default, 15 minutes; export CHECK_INTERVAL_SECONDS to shorten it
+# while testing. Activate with SPRING_PROFILES_ACTIVE=local (or
+# --spring.profiles.active=local).
 app:
   check:
-    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:60}
+    default-interval-seconds: ${CHECK_INTERVAL_SECONDS:900}

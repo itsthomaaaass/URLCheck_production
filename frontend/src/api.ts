@@ -167,3 +167,88 @@ export async function fetchCurrentUser(): Promise<User | null> {
   const body = await request<{ user: User | null }>("/api/auth/me");
   return body.user;
 }
+
+/** One URL a pending confirmation would delete. */
+export interface AiPendingUrl {
+  id: number;
+  name: string;
+  url: string;
+}
+
+/**
+ * A deletion the assistant proposed but did not perform. `token` is the only
+ * thing to send back; the rows the backend acts on come from its own copy of
+ * this proposal, not from `urls`.
+ */
+export interface AiConfirmation {
+  token: string;
+  urls: AiPendingUrl[];
+}
+
+/** One assistant answer, the conversation it belongs to, and anything to confirm. */
+export interface AiChatResponse {
+  /** Null only on a confirmation reply that named no conversation. */
+  conversationId: number | null;
+  message: string;
+  confirmation: AiConfirmation | null;
+}
+
+/**
+ * Sends one message to the AI assistant. Pass `confirmationToken` instead of a
+ * message to carry out a deletion the assistant proposed.
+ *
+ * `conversationId` continues an existing conversation. Pass null to start one:
+ * the backend opens it and reports the id in the answer, so a new chat costs no
+ * extra request and is named after its first message.
+ *
+ * The endpoint only exists when the backend has the assistant enabled and
+ * configured, and answers `503` when the provider cannot be reached.
+ */
+export function chatWithAssistant(
+  message: string,
+  conversationId: number | null,
+  confirmationToken?: string
+): Promise<AiChatResponse> {
+  return request<AiChatResponse>("/api/ai/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(
+      confirmationToken ? { confirmationToken, conversationId } : { message, conversationId }
+    )
+  });
+}
+
+/** One conversation as the history list shows it, most recent activity first. */
+export interface AiConversationSummary {
+  id: number;
+  title: string;
+  updatedAt: string;
+}
+
+/** One stored message of a conversation. */
+export interface AiStoredMessage {
+  role: "USER" | "ASSISTANT";
+  content: string;
+}
+
+/** One conversation and its complete stored history, oldest message first. */
+export interface AiConversationDetail {
+  id: number;
+  title: string;
+  messages: AiStoredMessage[];
+}
+
+/** The signed-in user's conversations. Only the most recent ones are kept. */
+export function fetchConversations(): Promise<AiConversationSummary[]> {
+  return request<AiConversationSummary[]>("/api/ai/conversations");
+}
+
+/** One conversation and everything that was said in it. */
+export function fetchConversation(id: number): Promise<AiConversationDetail> {
+  return request<AiConversationDetail>(`/api/ai/conversations/${id}`);
+}
+
+/** Deletes a conversation and its messages. */
+export function deleteConversation(id: number): Promise<void> {
+  return request<void>(`/api/ai/conversations/${id}`, { method: "DELETE" });
+}
